@@ -38,7 +38,10 @@ void SlippiSpectateServer::startGame()
 	{
 		return;
 	}
-	m_event_queue.Push("START_GAME");
+
+	json start_game_message;
+	start_game_message["type"] = "start_game";
+	m_event_queue.Push(start_game_message.dump());
 }
 
 // CALLED FROM DOLPHIN MAIN THREAD
@@ -48,7 +51,9 @@ void SlippiSpectateServer::endGame()
 	{
 		return;
 	}
-	m_event_queue.Push("END_GAME");
+	json end_game_message;
+	end_game_message["type"] = "end_game";
+	m_event_queue.Push(end_game_message.dump());
 }
 
 // CALLED FROM SERVER THREAD
@@ -94,38 +99,38 @@ void SlippiSpectateServer::popEvents()
 		std::string event;
 		m_event_queue.Pop(event);
 		// These two are meta-events, used to signify the start/end of a game
-		//  They are not sent over the wire
-		if (event == "END_GAME")
+		json json_message = json::parse(event, nullptr, false);
+		if (!json_message.is_discarded() && (json_message.find("type") != json_message.end()))
 		{
-			m_menu_cursor = 0;
-			if (m_event_buffer.size() > 0)
+			if (json_message["type"] == "end_game")
 			{
-				m_cursor_offset += m_event_buffer.size();
+				u32 cursor = (u32)(m_event_buffer.size() + m_cursor_offset);
+				json_message["cursor"] = cursor;
+				json_message["next_cursor"] = cursor + 1;
+				m_menu_cursor = 0;
+				if (m_event_buffer.size() > 0)
+				{
+					m_cursor_offset += m_event_buffer.size();
+				}
+				m_event_buffer.push_back(json_message.dump());
+				m_menu_event.clear();
+				m_in_game = false;
+				continue;
 			}
-			m_menu_event.clear();
-			m_in_game = false;
-			continue;
-		}
-		if (event == "START_GAME")
-		{
-			m_event_buffer.clear();
-			m_in_game = true;
-			continue;
+			if (json_message["type"] == "start_game")
+			{
+				m_event_buffer.clear();
+				u32 cursor = (u32)(m_event_buffer.size() + m_cursor_offset);
+				m_in_game = true;
+				json_message["cursor"] = cursor;
+				json_message["next_cursor"] = cursor + 1;
+				m_event_buffer.push_back(json_message.dump());
+				continue;
+			}
 		}
 
 		// Make json wrapper for game event
 		json game_event;
-
-		// An SLP event with an empty payload is a quasi-event that signifies
-		//  the unclean exit of a game. Send this out as its own event
-		//  (Since you can't meaningfully concat it with other events)
-		if (event.empty())
-		{
-			game_event["payload"] = "";
-			game_event["type"] = "game_event";
-			m_event_buffer.push_back(game_event.dump());
-			continue;
-		}
 
 		if (!m_in_game)
 		{
@@ -170,6 +175,8 @@ SlippiSpectateServer::SlippiSpectateServer()
 
 	m_in_game = false;
 	m_menu_cursor = 0;
+	m_menu_event.clear();
+	m_cursor_offset = 0;
 
 	// Spawn thread for socket listener
 	m_stop_socket_thread = false;
